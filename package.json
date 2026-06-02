@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "vitest run",
     "build": "node scripts/clean-dist.mjs && vite build && node scripts/build-b2b-html.mjs && node scripts/build-seo-html.mjs",
     "lint": "node scripts/lint-qa.mjs",
     "lint:fix": "node scripts/lint-qa.mjs",
@@ -100,6 +101,7 @@
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.2",
-    "vite": "^5.4.21"
+    "vite": "^5.4.21",
+    "vitest": "^4.1.8"
   }
 }

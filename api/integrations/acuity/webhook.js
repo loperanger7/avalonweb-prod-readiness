@@ -63,8 +63,12 @@ const STATUS_BY_ACTION = {
   canceled:    'canceled',
 };
 
-// Canonical: upsert public.appointments by acuity_appointment_id (no native
-// unique constraint, so select-then-update/insert).
+async function getDefaultTenantId(db) {
+  const { data } = await db.from('tenants')
+    .select('id').eq('slug', 'avalon-vitality').maybeSingle();
+  return data?.id || null;
+}
+
 async function upsertAppointment(db, appt, action) {
   const acuityId = String(appt.id);
   const contact = {
@@ -72,27 +76,27 @@ async function upsertAppointment(db, appt, action) {
     email: appt.email || null,
     phone: appt.phone || null,
   };
+  const tenantId = await getDefaultTenantId(db);
   const now = new Date().toISOString();
-  const patch = {
+  const row = {
     acuity_appointment_id: acuityId,
     starts_at:             appt.datetime || appt.date || null,
     status:                STATUS_BY_ACTION[action] || 'scheduled',
     protocol_key:          appt.type || null,
     external_payload:      { provider: 'acuity', action, contact, appointment: appt },
+    tenant_id:             tenantId,
     updated_at:            now,
+    created_at:            now,
   };
 
-  const { data: existing } = await db.from('appointments')
-    .select('id').eq('acuity_appointment_id', acuityId).maybeSingle();
+  // Atomic upsert keyed on acuity_appointment_id (UNIQUE partial index from 005).
+  const { data, error } = await db.from('appointments').upsert(
+    row,
+    { onConflict: 'acuity_appointment_id', ignoreDuplicates: false }
+  ).select('id').single();
 
-  if (existing) {
-    await db.from('appointments').update(patch).eq('id', existing.id);
-    return existing.id;
-  }
-  const { data, error } = await db.from('appointments')
-    .insert({ ...patch, created_at: now }).select('id').single();
   if (error) {
-    console.error('[acuity/webhook] appointment insert failed:', error.message);
+    console.error('[acuity/webhook] appointment upsert failed:', error.message);
     return null;
   }
   return data?.id || null;
@@ -139,6 +143,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, duplicate: true });
     }
 
+    const tenantId = await getDefaultTenantId(db);
     const { data: eventRow } = await db.from('acuity_events').upsert({
       webhook_event_hash:    hash,
       acuity_appointment_id: String(apptId),
@@ -148,6 +153,7 @@ export default async function handler(req, res) {
       signature_valid:       signature.valid,
       raw_payload_json:      body,
       processed_status:      'pending',
+      tenant_id:             tenantId,
       created_at:            new Date().toISOString(),
     }, { onConflict: 'webhook_event_hash', ignoreDuplicates: false }).select().single();
     const eventId = eventRow?.id;

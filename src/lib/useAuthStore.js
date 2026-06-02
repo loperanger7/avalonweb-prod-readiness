@@ -32,7 +32,7 @@ const DEMO_USERS = {
   'PHYSICIAN001': { role: 'physician', name: 'Medical Director',  redirect: '/provider/role-os',  status: 'active', canonical: 'PHYSICIAN001' },
   'PHYSICIAN0001': { role: 'physician', name: 'Medical Director', redirect: '/provider/role-os',  status: 'active', canonical: 'PHYSICIAN001' },
 };
-const DEMO_PASSWORD = import.meta.env.VITE_AVALON_DEMO_PASSWORD || 'JonJones1986';
+const DEMO_PASSWORD = import.meta.env.VITE_AVALON_DEMO_PASSWORD || '';
 // ─────────────────────────────────────────────────────────────────────────
 
 function normalizeLoginIdentifier(value = '') {

@@ -71,6 +71,7 @@ export default async function handler(req, res) {
   const metadata = { kind: 'balance', acuityAppointmentId: String(acuityAppointmentId) };
 
   try {
+    const idempotencyKey = `balance-${acuityAppointmentId}-${amount}`;
     const pi = await stripe.paymentIntents.create({
       amount,
       currency,
@@ -79,7 +80,7 @@ export default async function handler(req, res) {
       off_session: true,
       confirm: true,
       metadata,
-    });
+    }, { idempotencyKey });
 
     const now = new Date().toISOString();
     await db.from('appointments').update({

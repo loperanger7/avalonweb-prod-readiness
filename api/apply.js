@@ -191,20 +191,23 @@ export default async function handler(req, res) {
       </div>
     `;
 
-    // 1. Internal notification — must succeed, or we fail the request.
-    const applyResult = await resend.emails.send({
-      from: FROM_INTERNAL,
-      to: INTERNAL_TO,
-      replyTo: email,
-      subject: `New Membership Application — ${firstName} ${lastName}`,
-      html: internalHtml,
-    });
-    if (applyResult?.error) {
-      console.error('Apply internal email failed:', applyResult.error);
-      return res.status(502).json({ error: 'Email service rejected the send.', detail: applyResult.error.message || JSON.stringify(applyResult.error) });
+    // Both emails are best-effort. The application succeeds regardless of
+    // email delivery. A customer should never see an error because Resend is down.
+    try {
+      const applyResult = await resend.emails.send({
+        from: FROM_INTERNAL,
+        to: INTERNAL_TO,
+        replyTo: email,
+        subject: `New Membership Application — ${firstName} ${lastName}`,
+        html: internalHtml,
+      });
+      if (applyResult?.error) {
+        console.error('Apply internal email failed:', applyResult.error);
+      }
+    } catch (err) {
+      console.error('Apply internal email threw:', err.message);
     }
 
-    // 2. Applicant confirmation — fire-and-forget. Failure shouldn't block.
     try {
       await resend.emails.send({
         from: FROM_APPLICANT,
@@ -214,7 +217,7 @@ export default async function handler(req, res) {
         html: applicantHtml,
       });
     } catch (err) {
-      console.error('Applicant confirmation email failed:', err);
+      console.error('Applicant confirmation email failed:', err.message);
     }
 
     return res.status(200).json({ success: true });

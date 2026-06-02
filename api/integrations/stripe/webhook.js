@@ -1,4 +1,5 @@
 import Stripe from 'stripe';
+import { cancelAppointment } from '../../_acuity.js';
 import { reconciliationTypeForStripeEvent } from '../../_reconciliation.js';
 import { requireLiveWebhook } from '../../_lib/pre-api-guard.js';
 
@@ -29,27 +30,16 @@ async function getSupabase() {
   return _supabase;
 }
 
-// Canonical record is public.appointments. Resolve by Acuity id, then Stripe session.
-async function findAppointmentId(db, { acuityId, sessionId }) {
-  if (acuityId) {
-    const { data } = await db.from('appointments')
-      .select('id').eq('acuity_appointment_id', String(acuityId)).maybeSingle();
-    if (data) return data.id;
-  }
-  if (sessionId) {
-    const { data } = await db.from('appointments')
-      .select('id').eq('stripe_checkout_session_id', sessionId).maybeSingle();
-    if (data) return data.id;
-  }
-  return null;
+async function getDefaultTenantId(db) {
+  const { data } = await db.from('tenants')
+    .select('id').eq('slug', 'avalon-vitality').maybeSingle();
+  return data?.id || null;
 }
 
 async function handleCheckoutCompleted(stripe, db, session) {
   const md = session.metadata || {};
   const acuityId = md.acuityAppointmentId || null;
 
-  // Pull the saved card off the deposit PaymentIntent so the nurse can charge
-  // the balance off-session later.
   let paymentMethodId = null;
   const paymentIntentId = session.payment_intent || null;
   if (paymentIntentId) {
@@ -61,34 +51,41 @@ async function handleCheckoutCompleted(stripe, db, session) {
     }
   }
 
+  const tenantId = await getDefaultTenantId(db);
   const now = new Date().toISOString();
-  const patch = {
-    stripe_checkout_session_id:   session.id,
-    stripe_customer_id:           session.customer || null,
+  const row = {
+    acuity_appointment_id:         acuityId,
+    stripe_checkout_session_id:    session.id,
+    stripe_customer_id:            session.customer || null,
     stripe_deposit_payment_intent: paymentIntentId,
-    stripe_payment_method_id:     paymentMethodId,
-    deposit_paid_at:              now,
-    payment_status:               'deposit_paid',
-    balance_due_cents:            md.balanceDueCents != null ? Number(md.balanceDueCents) : null,
-    visit_subtotal_cents:         md.visitSubtotalCents != null ? Number(md.visitSubtotalCents) : null,
-    deposit_amount_cents:         md.depositAmountCents != null ? Number(md.depositAmountCents) : 5000,
-    updated_at:                   now,
+    stripe_payment_method_id:      paymentMethodId,
+    deposit_paid_at:               now,
+    payment_status:                'deposit_paid',
+    balance_due_cents:             md.balanceDueCents != null ? Number(md.balanceDueCents) : null,
+    visit_subtotal_cents:          md.visitSubtotalCents != null ? Number(md.visitSubtotalCents) : null,
+    deposit_amount_cents:          md.depositAmountCents != null ? Number(md.depositAmountCents) : 5000,
+    tenant_id:                     tenantId,
+    updated_at:                    now,
   };
 
-  const id = await findAppointmentId(db, { acuityId, sessionId: session.id });
-  if (id) {
-    await db.from('appointments').update(patch).eq('id', id);
+  // Atomic upsert: if a row already exists (from Acuity webhook), update it.
+  // If not, insert. The UNIQUE partial index on acuity_appointment_id handles
+  // concurrent delivery without 23505 races.
+  if (acuityId) {
+    const { error } = await db.from('appointments').upsert(
+      { ...row, created_at: now },
+      { onConflict: 'acuity_appointment_id', ignoreDuplicates: false }
+    );
+    if (error) console.warn('[stripe/webhook] appointment upsert failed:', error.message);
     return { action: 'deposit_paid', matched: true };
   }
 
-  // Acuity webhook hasn't created the row yet — insert a minimal one; the Acuity
-  // webhook will enrich it (idempotent on acuity_appointment_id).
-  const { error } = await db.from('appointments').insert({
-    acuity_appointment_id: acuityId,
-    ...patch,
-    created_at: now,
-  });
-  if (error) console.warn('[stripe/webhook] appointment insert failed:', error.message);
+  // No Acuity ID (edge case: direct Stripe-only checkout). Insert by session ID.
+  const { error } = await db.from('appointments').upsert(
+    { ...row, created_at: now },
+    { onConflict: 'stripe_checkout_session_id', ignoreDuplicates: false }
+  );
+  if (error) console.warn('[stripe/webhook] appointment upsert (session) failed:', error.message);
   return { action: 'deposit_paid', matched: false };
 }
 
@@ -154,9 +151,27 @@ export default async function handler(req, res) {
       case 'payment_intent.succeeded':
         result = await handleBalancePaid(db, event.data.object);
         break;
-      case 'checkout.session.expired':
-        result = { action: 'release_scheduling_hold' };
+      case 'checkout.session.expired': {
+        const expiredSession = event.data.object;
+        const expiredAcuityId = expiredSession.metadata?.acuityAppointmentId;
+        if (expiredAcuityId) {
+          try {
+            await cancelAppointment(expiredAcuityId, 'Stripe checkout expired — customer did not complete payment.');
+            if (db) {
+              await db.from('appointments')
+                .update({ status: 'canceled', updated_at: new Date().toISOString() })
+                .eq('acuity_appointment_id', String(expiredAcuityId));
+            }
+            result = { action: 'expired_appointment_canceled', acuityAppointmentId: expiredAcuityId };
+          } catch (cancelErr) {
+            console.error('[stripe/webhook] expired cancel failed:', cancelErr.message);
+            result = { action: 'expired_cancel_failed', error: cancelErr.message };
+          }
+        } else {
+          result = { action: 'expired_no_appointment' };
+        }
         break;
+      }
       default:
         result = { action: 'store_for_audit' };
     }

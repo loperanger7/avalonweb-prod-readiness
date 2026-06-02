@@ -322,7 +322,8 @@ export default async function handler(req, res) {
       sessionParams.payment_intent_data = { setup_future_usage: 'off_session' };
     }
 
-    const session = await stripe.checkout.sessions.create(sessionParams);
+    const idempotencyKey = `checkout-${contact.email}-${Date.now()}`;
+    const session = await stripe.checkout.sessions.create(sessionParams, { idempotencyKey });
 
     // Sync the client into Attio CRM — non-blocking, never fails the booking.
     // CRM-safe: contact + lifecycle only, no clinical/intake details.
@@ -348,11 +349,11 @@ export default async function handler(req, res) {
       try {
         await cancelAppointment(acuityAppointment.id, 'Stripe checkout failed before payment confirmation.');
       } catch (rollbackErr) {
-        console.error('[create-checkout-session:rollback]', rollbackErr.message, rollbackErr.body || '');
+        console.error('[create-checkout-session:rollback]', rollbackErr.message);
       }
     }
     const reconciliation = buildCheckoutReconciliationHint({ acuityAppointment, error: err });
-    console.error('[create-checkout-session]', err.message, err.body || '', reconciliation || '');
+    console.error('[create-checkout-session]', err.message, err.status || '', reconciliation?.case_type || '');
     return res.status(err.status || 500).json({
       error: err.message || 'Checkout failed',
       reconciliation: reconciliation

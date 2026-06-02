@@ -79,11 +79,6 @@ function priceForItem(item = {}) {
   const key = normalizeKey(item.key || item.cartKey || '');
   if (ITEM_PRICE_BY_KEY.has(key)) return ITEM_PRICE_BY_KEY.get(key);
 
-  if (item.type === 'custom-treatment') {
-    const proposed = Number(item.price);
-    if (Number.isFinite(proposed) && proposed >= 150 && proposed <= 5000) return proposed;
-  }
-
   const label = normalize(item.label || item.name || '');
   if (ADDON_PRICE_BY_LABEL.has(label)) return ADDON_PRICE_BY_LABEL.get(label);
 

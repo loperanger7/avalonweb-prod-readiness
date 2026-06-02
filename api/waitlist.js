@@ -125,20 +125,23 @@ export default async function handler(req, res) {
       </div>
     `;
 
-    // 1. Internal notification — must succeed.
-    const internalResult = await resend.emails.send({
-      from: FROM_INTERNAL,
-      to: INTERNAL_TO,
-      replyTo: email,
-      subject: `Waitlist signup — ${email}`,
-      html: internalHtml,
-    });
-    if (internalResult?.error) {
-      console.error('Waitlist internal email failed:', internalResult.error);
-      return res.status(502).json({ error: 'Email service rejected the send.', detail: internalResult.error.message || JSON.stringify(internalResult.error) });
+    // Both emails are best-effort. The waitlist signup succeeds regardless of
+    // email delivery. A customer should never see an error because Resend is down.
+    try {
+      const internalResult = await resend.emails.send({
+        from: FROM_INTERNAL,
+        to: INTERNAL_TO,
+        replyTo: email,
+        subject: `Waitlist signup — ${email}`,
+        html: internalHtml,
+      });
+      if (internalResult?.error) {
+        console.error('Waitlist internal email failed:', internalResult.error);
+      }
+    } catch (err) {
+      console.error('Waitlist internal email threw:', err.message);
     }
 
-    // 2. Subscriber confirmation — fire-and-forget.
     try {
       await resend.emails.send({
         from: FROM_SUBSCRIBER,
@@ -148,7 +151,7 @@ export default async function handler(req, res) {
         html: subscriberHtml,
       });
     } catch (err) {
-      console.error('Waitlist confirmation email failed:', err);
+      console.error('Waitlist confirmation email failed:', err.message);
     }
 
     return res.status(200).json({ success: true });

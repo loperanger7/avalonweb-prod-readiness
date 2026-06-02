@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from '@/components/ui/PageTransitionMotion';
 import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
@@ -722,6 +722,7 @@ function ContactStep({ onNext, onBack, defaultValues }) {
 /* ─── Step 3: Reserve ────────────────────────────────────────── */
 function PaymentStep({ items, membership, contact, appointment, onBack }) {
   const [loading, setLoading] = useState(false);
+  const submittingRef = useRef(false);
   const [error, setError] = useState(null);
   const safeContact = contact || {};
   const [paymentMethod, setPaymentMethod] = useState('apple_pay');
@@ -762,7 +763,10 @@ function PaymentStep({ items, membership, contact, appointment, onBack }) {
   const SelectedPaymentIcon = selectedMethod.icon || CreditCard;
 
   const handleCheckout = async () => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     if (!contactReady) {
+      submittingRef.current = false;
       setError('Add full name, phone, and email.');
       track(ANALYTICS_EVENTS.CHECKOUT_FAILED, {
         funnel: 'legacy_checkout',
@@ -852,7 +856,8 @@ function PaymentStep({ items, membership, contact, appointment, onBack }) {
       });
       if (data.url) window.location.href = data.url;
     } catch (err) {
-      setError(err.message);
+      submittingRef.current = false;
+      setError(err.message || 'We couldn’t complete your booking right now. Your card has not been charged. Please try again or contact us at support@avalonvitality.co.');
       setLoading(false);
       track(ANALYTICS_EVENTS.CHECKOUT_FAILED, {
         funnel: 'legacy_checkout',
